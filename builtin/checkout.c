@@ -62,6 +62,8 @@ struct checkout_opts {
 	int switch_branch_doing_nothing_is_ok;
 	int only_merge_on_switching_branches;
 	int empty_pathspec_ok;
+	int checkout_index;
+	int checkout_worktree;
 
 	const char *new_branch;
 	const char *new_branch_force;
@@ -393,6 +395,7 @@ static int checkout_paths(const struct checkout_opts *opts,
 	struct commit *head;
 	int errs = 0;
 	struct lock_file lock_file = LOCK_INIT;
+	int checkout_index;
 
 	trace2_cmd_mode(opts->patch_mode ? "patch" : "path");
 
@@ -418,9 +421,26 @@ static int checkout_paths(const struct checkout_opts *opts,
 		die(_("Cannot update paths and switch to branch '%s' at the same time."),
 		    opts->new_branch);
 
-	if (opts->patch_mode)
-		return run_add_interactive(revision, "--patch=checkout",
-					   &opts->pathspec);
+	if (!opts->checkout_worktree && !opts->checkout_index)
+		die(_("neither '%s' or '%s' is specified"),
+		    "--index", "--worktree");
+
+	if (!opts->source_tree && !opts->checkout_worktree)
+		die(_("'%s' must be used when '%s' is not specified"),
+		    "--worktree", "--source");
+
+	if (opts->patch_mode) {
+		const char *patch_mode;
+
+		if (opts->checkout_index && opts->checkout_worktree)
+			patch_mode = "--patch=checkout";
+		else if (opts->checkout_index && !opts->checkout_worktree)
+			patch_mode = "--patch=reset";
+		else
+			die(_("'%s' with only '%s' is not currently supported"),
+			    "--patch", "--worktree");
+		return run_add_interactive(revision, patch_mode, &opts->pathspec);
+	}
 
 	repo_hold_locked_index(the_repository, &lock_file, LOCK_DIE_ON_ERROR);
 	if (read_cache_preload(&opts->pathspec) < 0)
@@ -478,10 +498,30 @@ static int checkout_paths(const struct checkout_opts *opts,
 		return 1;
 
 	/* Now we are committed to check them out */
-	errs |= checkout_worktree(opts);
+	if (opts->checkout_worktree)
+		errs |= checkout_worktree(opts);
 
-	if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
-		die(_("unable to write new index file"));
+	/*
+	 * Allow updating the index when checking out from the index.
+	 * This is to save new stat info.
+	 */
+	if (opts->checkout_worktree && !opts->checkout_index && !opts->source_tree)
+		checkout_index = 1;
+	else
+		checkout_index = opts->checkout_index;
+
+	if (checkout_index) {
+		if (write_locked_index(&the_index, &lock_file, COMMIT_LOCK))
+			die(_("unable to write new index file"));
+	} else {
+		/*
+		 * NEEDSWORK: if --worktree is not specified, we
+		 * should save stat info of checked out files in the
+		 * index to avoid the next (potentially costly)
+		 * refresh. But it's a bit tricker to do...
+		 */
+		rollback_lock_file(&lock_file);
+	}
 
 	read_ref_full("HEAD", 0, &rev, NULL);
 	head = lookup_commit_reference_gently(the_repository, &rev, 1);
@@ -1373,6 +1413,20 @@ static int checkout_main(int argc, const char **argv, const char *prefix,
 	if (opts->overlay_mode == 1 && opts->patch_mode)
 		die(_("-p and --overlay are mutually exclusive"));
 
+	if (opts->checkout_index >= 0 || opts->checkout_worktree >= 0) {
+		if (opts->checkout_index < 0)
+			opts->checkout_index = 0;
+		if (opts->checkout_worktree < 0)
+			opts->checkout_worktree = 0;
+	} else {
+		if (opts->checkout_index < 0)
+			opts->checkout_index = -opts->checkout_index - 1;
+		if (opts->checkout_worktree < 0)
+			opts->checkout_worktree = -opts->checkout_worktree - 1;
+	}
+	if (opts->checkout_index < 0 || opts->checkout_worktree < 0)
+		BUG("these flags should be non-negative by now");
+
 	/*
 	 * From here on, new_branch will contain the branch to be checked out,
 	 * and new_branch_force and new_orphan_branch will tell us which one of
@@ -1527,6 +1581,8 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 	opts.implicit_detach = 1;
 	opts.empty_pathspec_ok = 1;
 	opts.overlay_mode = -1;
+	opts.checkout_index = -2;    /* default on */
+	opts.checkout_worktree = -2; /* default on */
 
 	options = parse_options_dup(checkout_options);
 	options = add_common_options(&opts, options);
@@ -1580,6 +1636,10 @@ int cmd_restore(int argc, const char **argv, const char *prefix)
 	struct option restore_options[] = {
 		OPT_STRING('s', "source", &opts.from_treeish, "<tree-ish>",
 			   N_("where the checkout from")),
+		OPT_BOOL('I', "index", &opts.checkout_index,
+			   N_("restore the index")),
+		OPT_BOOL('W', "worktree", &opts.checkout_worktree,
+			   N_("restore the working tree (default)")),
 		OPT_BOOL(0, "overlay", &opts.overlay_mode, N_("use overlay mode")),
 		OPT_END()
 	};
@@ -1590,6 +1650,8 @@ int cmd_restore(int argc, const char **argv, const char *prefix)
 	opts.accept_pathspec = 1;
 	opts.empty_pathspec_ok = 0;
 	opts.overlay_mode = 0;
+	opts.checkout_index = -1;    /* default off */
+	opts.checkout_worktree = -2; /* default on */
 
 	options = parse_options_dup(restore_options);
 	options = add_common_options(&opts, options);
