@@ -38,7 +38,7 @@ static const char * const switch_branch_usage[] = {
 };
 
 static const char * const restore_files_usage[] = {
-	N_("git restore [<options>] [<branch>] -- <file>..."),
+	N_("git restore [<options>] [--source=<branch>] <file>..."),
 	NULL,
 };
 
@@ -57,6 +57,7 @@ struct checkout_opts {
 	int count_checkout_paths;
 	int overlay_mode;
 	int dwim_new_local_branch;
+	int accept_ref;
 	int accept_pathspec;
 	int switch_branch_doing_nothing_is_ok;
 	int only_merge_on_switching_branches;
@@ -72,6 +73,7 @@ struct checkout_opts {
 	int branch_exists;
 	const char *prefix;
 	struct pathspec pathspec;
+	const char *from_treeish;
 	struct tree *source_tree;
 };
 
@@ -1324,6 +1326,7 @@ static int checkout_main(int argc, const char **argv, const char *prefix,
 {
 	struct branch_info new_branch_info;
 	int dwim_remotes_matched = 0;
+	int parseopt_flags = 0;
 
 	memset(&new_branch_info, 0, sizeof(new_branch_info));
 	opts->overwrite_ignore = 1;
@@ -1335,8 +1338,13 @@ static int checkout_main(int argc, const char **argv, const char *prefix,
 
 	opts->track = BRANCH_TRACK_UNSPECIFIED;
 
-	argc = parse_options(argc, argv, prefix, options, usagestr,
-			     PARSE_OPT_KEEP_DASHDASH);
+	if (!opts->accept_pathspec && !opts->accept_ref)
+		BUG("make up your mind, you need to take _something_");
+	if (opts->accept_pathspec && opts->accept_ref)
+		parseopt_flags = PARSE_OPT_KEEP_DASHDASH;
+
+	argc = parse_options(argc, argv, prefix, options,
+			     usagestr, parseopt_flags);
 
 	if (opts->show_progress < 0) {
 		if (opts->quiet)
@@ -1393,7 +1401,7 @@ static int checkout_main(int argc, const char **argv, const char *prefix,
 	 * including "last branch" syntax and DWIM-ery for names of
 	 * remote branches, erroring out for invalid or ambiguous cases.
 	 */
-	if (argc) {
+	if (argc && opts->accept_ref) {
 		struct object_id rev;
 		int dwim_ok =
 			!opts->patch_mode &&
@@ -1405,6 +1413,18 @@ static int checkout_main(int argc, const char **argv, const char *prefix,
 					     &dwim_remotes_matched);
 		argv += n;
 		argc -= n;
+	} else if (!opts->accept_ref && opts->from_treeish) {
+		struct object_id rev;
+
+		if (get_oid_mb(opts->from_treeish, &rev))
+			die(_("could not resolve %s"), opts->from_treeish);
+
+		setup_new_branch_info_and_source_tree(&new_branch_info,
+						      opts, &rev,
+						      opts->from_treeish);
+
+		if (!opts->source_tree)
+			die(_("reference is not a tree: %s"), opts->from_treeish);
 	}
 
 	if (argc) {
@@ -1488,6 +1508,7 @@ int cmd_checkout(int argc, const char **argv, const char *prefix)
 	opts.dwim_new_local_branch = 1;
 	opts.switch_branch_doing_nothing_is_ok = 1;
 	opts.only_merge_on_switching_branches = 0;
+	opts.accept_ref = 1;
 	opts.accept_pathspec = 1;
 	opts.implicit_detach = 1;
 
@@ -1519,6 +1540,7 @@ int cmd_switch(int argc, const char **argv, const char *prefix)
 
 	memset(&opts, 0, sizeof(opts));
 	opts.dwim_new_local_branch = 0;
+	opts.accept_ref = 1;
 	opts.accept_pathspec = 0;
 	opts.switch_branch_doing_nothing_is_ok = 0;
 	opts.only_merge_on_switching_branches = 1;
@@ -1537,15 +1559,19 @@ int cmd_switch(int argc, const char **argv, const char *prefix)
 int cmd_restore(int argc, const char **argv, const char *prefix)
 {
 	struct checkout_opts opts;
-	struct option *options = NULL;
+	struct option *options;
+	struct option restore_options[] = {
+		OPT_STRING('s', "source", &opts.from_treeish, "<tree-ish>",
+			   N_("where the checkout from")),
+		OPT_END()
+	};
 	int ret;
 
 	memset(&opts, 0, sizeof(opts));
-	opts.dwim_new_local_branch = 1;
-	opts.switch_branch_doing_nothing_is_ok = 0;
+	opts.accept_ref = 0;
 	opts.accept_pathspec = 1;
 
-	options = parse_options_dup(options);
+	options = parse_options_dup(restore_options);
 	options = add_common_options(&opts, options);
 	options = add_checkout_path_options(&opts, options);
 
