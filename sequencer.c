@@ -160,6 +160,22 @@ static GIT_PATH_FUNC(rebase_path_strategy_opts, "rebase-merge/strategy_opts")
 static GIT_PATH_FUNC(rebase_path_allow_rerere_autoupdate, "rebase-merge/allow_rerere_autoupdate")
 static GIT_PATH_FUNC(rebase_path_reschedule_failed_exec, "rebase-merge/reschedule-failed-exec")
 
+struct cleanup_config_mapping {
+    const char *config_value;
+    enum commit_msg_cleanup_mode editor_cleanup;
+    enum commit_msg_cleanup_mode no_editor_cleanup;
+};
+
+/* note that we assume that cleanup_config_mapping[0] contains the default settings */
+struct cleanup_config_mapping cleanup_config_mappings[] = {
+	{ "default", COMMIT_MSG_CLEANUP_ALL, COMMIT_MSG_CLEANUP_SPACE },
+	{ "verbatim", COMMIT_MSG_CLEANUP_NONE, COMMIT_MSG_CLEANUP_NONE },
+	{ "whitespace", COMMIT_MSG_CLEANUP_SPACE, COMMIT_MSG_CLEANUP_SPACE },
+	{ "strip", COMMIT_MSG_CLEANUP_ALL, COMMIT_MSG_CLEANUP_ALL },
+	{ "scissors", COMMIT_MSG_CLEANUP_SCISSORS, COMMIT_MSG_CLEANUP_SPACE },
+	{ NULL, 0, 0 }
+};
+
 static int git_sequencer_config(const char *k, const char *v, void *cb)
 {
 	struct replay_opts *opts = cb;
@@ -504,24 +520,40 @@ static int fast_forward_to(struct repository *r,
 enum commit_msg_cleanup_mode get_cleanup_mode(const char *cleanup_arg,
 	int use_editor, int die_on_error)
 {
-	if (!cleanup_arg || !strcmp(cleanup_arg, "default"))
-		return use_editor ? COMMIT_MSG_CLEANUP_ALL :
-				    COMMIT_MSG_CLEANUP_SPACE;
-	else if (!strcmp(cleanup_arg, "verbatim"))
-		return COMMIT_MSG_CLEANUP_NONE;
-	else if (!strcmp(cleanup_arg, "whitespace"))
-		return COMMIT_MSG_CLEANUP_SPACE;
-	else if (!strcmp(cleanup_arg, "strip"))
-		return COMMIT_MSG_CLEANUP_ALL;
-	else if (!strcmp(cleanup_arg, "scissors"))
-		return use_editor ? COMMIT_MSG_CLEANUP_SCISSORS :
-				    COMMIT_MSG_CLEANUP_SPACE;
-	else if (!die_on_error) {
+	struct cleanup_config_mapping *default_mapping = &cleanup_config_mappings[0];
+	struct cleanup_config_mapping *current_mapping;
+
+	if (!cleanup_arg) {
+		return use_editor ? default_mapping->editor_cleanup :
+				    default_mapping->no_editor_cleanup;
+	}
+
+	for (current_mapping = cleanup_config_mappings; current_mapping->config_value; current_mapping++) {
+		if (!strcmp(cleanup_arg, current_mapping->config_value)) {
+			return use_editor ? current_mapping->editor_cleanup :
+					    current_mapping->no_editor_cleanup;
+		}
+	}
+
+	if (!die_on_error) {
 		warning(_("Invalid cleanup mode %s, falling back to default"), cleanup_arg);
-		return use_editor ? COMMIT_MSG_CLEANUP_ALL :
-				    COMMIT_MSG_CLEANUP_SPACE;
+		return use_editor ? default_mapping->editor_cleanup :
+				    default_mapping->no_editor_cleanup;
 	} else
 		die(_("Invalid cleanup mode %s"), cleanup_arg);
+}
+
+const char *get_config_from_cleanup(enum commit_msg_cleanup_mode cleanup_mode)
+{
+	struct cleanup_config_mapping *current_mapping;
+
+	for (current_mapping = &cleanup_config_mappings[1]; current_mapping->config_value; current_mapping++) {
+		if (cleanup_mode == current_mapping->editor_cleanup) {
+			return current_mapping->config_value;
+		}
+	}
+
+	BUG(_("invalid cleanup_mode provided"));
 }
 
 void append_conflicts_hint(struct index_state *istate,
@@ -2350,6 +2382,8 @@ static int populate_opts_cb(const char *key, const char *value, void *data)
 		opts->allow_rerere_auto =
 			git_config_bool_or_int(key, value, &error_flag) ?
 				RERERE_AUTOUPDATE : RERERE_NOAUTOUPDATE;
+	else if (!strcmp(key, "options.default-msg-cleanup"))
+		opts->default_msg_cleanup = get_cleanup_mode(value, 1, 1);
 	else
 		return error(_("invalid key: %s"), key);
 
@@ -2754,6 +2788,9 @@ static int save_opts(struct replay_opts *opts)
 		res |= git_config_set_in_file_gently(opts_file, "options.allow-rerere-auto",
 						     opts->allow_rerere_auto == RERERE_AUTOUPDATE ?
 						     "true" : "false");
+
+	res |= git_config_set_in_file_gently(opts_file, "options.default-msg-cleanup",
+					     get_config_from_cleanup(opts->default_msg_cleanup));
 	return res;
 }
 
