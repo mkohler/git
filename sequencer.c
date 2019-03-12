@@ -167,7 +167,7 @@ struct cleanup_config_mapping {
 };
 
 /* note that we assume that cleanup_config_mapping[0] contains the default settings */
-struct cleanup_config_mapping cleanup_config_mappings[] = {
+static struct cleanup_config_mapping cleanup_config_mappings[] = {
 	{ "default", COMMIT_MSG_CLEANUP_ALL, COMMIT_MSG_CLEANUP_SPACE },
 	{ "verbatim", COMMIT_MSG_CLEANUP_NONE, COMMIT_MSG_CLEANUP_NONE },
 	{ "whitespace", COMMIT_MSG_CLEANUP_SPACE, COMMIT_MSG_CLEANUP_SPACE },
