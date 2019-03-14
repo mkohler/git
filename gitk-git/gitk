@@ -7976,7 +7976,7 @@ proc getblobdiffs {ids} {
     if {[package vcompare $git_version "1.6.6"] >= 0} {
 	set submodule "--submodule"
     }
-    set cmd [diffcmd $ids "-p $textconv $submodule  -C --cc --no-commit-id -U$diffcontext"]
+    set cmd [diffcmd $ids "-p $textconv $submodule  -C -m --no-commit-id -U$diffcontext"]
     if {$ignorespace} {
 	append cmd " -w"
     }
